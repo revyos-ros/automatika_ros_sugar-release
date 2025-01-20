@@ -1,3 +1,4 @@
+release_repo_url: git@github.com:revyos-ros/automatika_ros_sugar-release.git
 tracks:
   humble:
     actions:
