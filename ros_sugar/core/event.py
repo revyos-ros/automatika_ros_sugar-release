@@ -1,7 +1,6 @@
 """Event"""
 
 import json
-import os
 import threading
 import time
 import logging
@@ -9,6 +8,8 @@ from abc import abstractmethod
 from typing import Any, Callable, Dict, List, Union
 from launch.event import Event as ROSLaunchEvent
 from launch.event_handler import EventHandler as ROSLaunchEventHandler
+import array
+import numpy as np
 
 from ..io.topic import Topic
 from .action import Action
@@ -60,7 +61,7 @@ def _access_attribute(obj: Any, nested_attributes: List[str]):
         raise AttributeError(f"Given attribute is not part of class {type(obj)}") from e
 
 
-def _get_attribute_type(obj: Any, attrs: tuple):
+def _get_attribute_type(cls: Any, attrs: tuple):
     """
     Gets the type of a nested attribute (specified by attrs) in given object
 
@@ -73,13 +74,13 @@ def _get_attribute_type(obj: Any, attrs: tuple):
     :rtype: Any
     """
     try:
-        result = obj
+        result = cls()
         for attr in attrs:
-            result = getattr(result, attr)
+            result = getattr(result, str(attr))
         return type(result)
     except AttributeError as e:
         raise AttributeError(
-            f"Given nested attributes '{attrs}' are not part of class {type(obj)}"
+            f"Given nested attributes '{attrs}' are not part of class {cls}"
         ) from e
 
 
@@ -93,6 +94,11 @@ def _check_attribute(cls, expected_type, attrs: tuple):
             if not hasattr(current_cls, attr):
                 return False
             current_cls = getattr(current_cls, str(attr))
+        # Handle the case of MultiArray data type
+        if isinstance(current_cls, array.array) and (
+            expected_type in [List, np.ndarray, list]
+        ):
+            return True
         return isinstance(current_cls, expected_type)
     except AttributeError:
         return False
@@ -173,6 +179,9 @@ class Operand:
         self.value: Union[float, int, bool, str, List] = _access_attribute(
             ros_message, attributes
         )
+        # Handle array case for all std MultiArray messages
+        if isinstance(self.value, array.array):
+            self.value = self.value.tolist()
 
         self.type_error_msg: str = "Cannot compare values of different types"
 
@@ -226,7 +235,7 @@ class Operand:
         :rtype: bool
         """
         self._check_similar_types(__value)
-        return self.value is __value
+        return self.value == __value
 
     def __ne__(self, __value: object) -> bool:
         """
@@ -354,14 +363,13 @@ class Event:
 
         elif isinstance(event_source, Topic):
             self.event_topic = event_source
-            if trigger_value is not None:
-                # Trigger access attributes
+            if nested_attributes is not None:
                 self._attrs: List[str] = (
                     nested_attributes
                     if isinstance(nested_attributes, List)
                     else [nested_attributes]
                 )
-
+            if trigger_value is not None:
                 self.trigger_ref_value = trigger_value
 
         else:
@@ -370,13 +378,13 @@ class Event:
             )
 
         # Check if given trigger is of valid type
-        if trigger_value and not _check_attribute(
+        if trigger_value is not None and not _check_attribute(
             self.event_topic.msg_type.get_ros_type(),
             type(self.trigger_ref_value),
             self._attrs,
         ):
             raise TypeError(
-                f"Cannot initiate with trigger of type {type(trigger_value)} for a data of type {_get_attribute_type(self.event_topic.msg_type.get_ros_type(), self._attrs)}"
+                f"Event Initialization error. Cannot initiate nested attribute '{self._attrs}' for class '{self.event_topic.msg_type.get_ros_type()}' with trigger of type '{type(trigger_value)}'. Should be '{_get_attribute_type(self.event_topic.msg_type.get_ros_type(), self._attrs)}'"
             )
 
         # Init trigger as False
@@ -451,18 +459,21 @@ class Event:
         :return: Event description dictionary
         :rtype: Dict
         """
-        return {
+        event_dict = {
             "event_name": self.name,
             "event_class": self.__class__.__name__,
             "topic": self.event_topic.to_json(),
-            "trigger_ref_value": self.trigger_ref_value,
-            "_attrs": self._attrs,
             "handle_once": self._handle_once,
             "event_delay": self._keep_event_delay,
         }
+        if hasattr(self, "trigger_ref_value"):
+            event_dict["trigger_ref_value"] = self.trigger_ref_value
+        if hasattr(self, "_attrs"):
+            event_dict["_attrs"] = self._attrs
+        return event_dict
 
     @dictionary.setter
-    def dictionary(self, dict_obj) -> None:
+    def dictionary(self, dict_obj: Dict) -> None:
         """
         Setter of the event using a dictionary
 
@@ -476,10 +487,12 @@ class Event:
                     name="dummy_init", msg_type="String"
                 )  # Dummy init to set from json
             self.event_topic.from_json(dict_obj["topic"])
-            self.trigger_ref_value = dict_obj["trigger_ref_value"]
-            self._attrs = dict_obj["_attrs"]
             self._handle_once = dict_obj["handle_once"]
             self._keep_event_delay = dict_obj["event_delay"]
+            if dict_obj.get("trigger_ref_value") is not None:
+                self.trigger_ref_value = dict_obj["trigger_ref_value"]
+            if dict_obj.get("_attrs") is not None:
+                self._attrs = dict_obj["_attrs"]
         except Exception as e:
             logging.error(f"Cannot set Event from incompatible dictionary. {e}")
             raise
