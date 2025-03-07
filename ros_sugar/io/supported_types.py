@@ -28,57 +28,68 @@ from std_msgs.msg import Header
 from std_msgs.msg import ByteMultiArray
 from std_msgs.msg import String as ROSString
 from std_msgs.msg import Bool as ROSBool
-from std_msgs.msg import Float32 as ROSFloat32
-from std_msgs.msg import Float64 as ROSFloat64
+from std_msgs.msg import (
+    Float32 as ROSFloat32,
+    Float32MultiArray as ROSFloat32MultiArray,
+)
+from std_msgs.msg import (
+    Float64 as ROSFloat64,
+    Float64MultiArray as ROSFloat64MultiArray,
+)
 
 from . import callbacks
+from .utils import numpy_to_multiarray
 
 
 _additional_types = []
 
 
-def _update_supportedtype_callback(existing_class: type, new_type: type) -> None:
-    if not new_type.callback or new_type.callback == existing_class.callback:
+def _update_supportedtype_callback(existing_class: type, new_class: type) -> None:
+    if not new_class.callback or new_class.callback == existing_class.callback:
         # If new type has no callback or it is the same as the current callback -> exit
         return
     if not existing_class.callback:
         # No callback is found for the existing class -> get callback from new type
-        existing_class.callback = new_type.callback
+        existing_class.callback = new_class.callback
     else:
         # If a callback already exists -> augment the list with a new callback
         if isinstance(existing_class.callback, List) and isinstance(
-            new_type.callback, List
+            new_class.callback, List
         ):
-            existing_class.callback.extend(new_type.callback)
-        elif isinstance(existing_class.callback, List) and not isinstance(
-            new_type.callback, List
+            existing_class.callback.extend(new_class.callback)
+        elif (
+            isinstance(existing_class.callback, List)
+            and not isinstance(new_class.callback, List)
+            and new_class.callback not in existing_class.callback
         ):
-            existing_class.callback.append(new_type.callback)
-        else:
+            existing_class.callback.append(new_class.callback)
+        elif not isinstance(existing_class.callback, List):
             existing_class.callback = [
                 existing_class.callback,
-                new_type.callback,
+                new_class.callback,
             ]
 
 
-def _update_supportedtype_conversion(existing_class: type, new_type: type) -> None:
-    if not new_type.convert or new_type.convert == existing_class.convert:
+def _update_supportedtype_conversion(existing_class: type, new_class: type) -> None:
+    if not new_class.convert or new_class.convert == existing_class.convert:
         return
     if not existing_class.convert:
-        existing_class.convert = new_type.convert
+        existing_class.convert = new_class.convert
     else:
         if isinstance(existing_class.convert, List) and isinstance(
-            new_type.convert, List
+            new_class.convert, List
         ):
-            existing_class.convert.extend(new_type.convert)
-        elif isinstance(existing_class.convert, List) and not isinstance(
-            new_type.convert, List
+            existing_class.convert.extend(new_class.convert)
+        elif (
+            isinstance(existing_class.convert, List)
+            and not isinstance(new_class.convert, List)
+            and new_class.convert not in existing_class.convert
         ):
-            existing_class.convert.append(new_type.convert)
-        else:
+            existing_class.convert.append(new_class.convert)
+        elif not isinstance(existing_class.convert, List):
             existing_class.convert = [
                 existing_class.convert,
-                new_type.convert,
+                new_class.convert,
             ]
 
 
@@ -91,28 +102,29 @@ def add_additional_datatypes(types: List[type]) -> None:
     global _additional_types
     # Create a dictionary for quick lookup of existing classes by name
     type_dict = {t.__name__: t for t in _additional_types}
+    import logging
 
-    for new_type in types:
-        if new_type.__name__ in type_dict:
+    for new_class in types:
+        if new_class.__name__ in type_dict:
             # Update the existing class with non-None attributes from the new class
-            existing_class = type_dict[new_type.__name__]
+            existing_class = type_dict[new_class.__name__]
 
-            if existing_class == SupportedType:
+            if existing_class == SupportedType or existing_class == new_class:
                 # Skip parent
                 continue
 
-            _update_supportedtype_callback(existing_class, new_type)
+            _update_supportedtype_callback(existing_class, new_class)
 
-            if hasattr(new_type, "_ros_type") and (
+            if hasattr(new_class, "_ros_type") and (
                 not hasattr(existing_class, "_ros_type") or not existing_class._ros_type
             ):
-                existing_class._ros_type = new_type._ros_type
+                existing_class._ros_type = new_class._ros_type
 
-            _update_supportedtype_conversion(existing_class, new_type)
+            _update_supportedtype_conversion(existing_class, new_class)
 
         else:
             # Add the new class to the list
-            _additional_types.append(new_type)
+            _additional_types.append(new_class)
 
 
 class Meta(type):
@@ -209,12 +221,27 @@ class Float32(SupportedType):
     @classmethod
     def convert(cls, output: float, **_) -> ROSFloat32:
         """
-        Takes a bool and returns a ROS message of type Bool
+        Takes a float and returns a ROS message of type Float32
         :return: Float32
         """
         msg = ROSFloat32()
         msg.data = output
         return msg
+
+
+class Float32MultiArray(SupportedType):
+    """Float32MultiArray."""
+
+    _ros_type = ROSFloat32MultiArray
+    callback = callbacks.StdMsgArrayCallback
+
+    @classmethod
+    def convert(cls, output: np.ndarray, **_) -> ROSFloat32MultiArray:
+        """
+        Takes a numpy array and returns a ROS message of type Float32MultiArray
+        :return: Float32
+        """
+        return numpy_to_multiarray(output, ROSFloat32MultiArray)
 
 
 class Float64(SupportedType):
@@ -226,12 +253,27 @@ class Float64(SupportedType):
     @classmethod
     def convert(cls, output: float, **_) -> ROSFloat64:
         """
-        Takes a bool and returns a ROS message of type Bool
+        Takes a float and returns a ROS message of type Float64
         :return: Float64
         """
         msg = ROSFloat64()
         msg.data = output
         return msg
+
+
+class Float64MultiArray(SupportedType):
+    """Float64MultiArray."""
+
+    _ros_type = ROSFloat64MultiArray
+    callback = callbacks.StdMsgArrayCallback
+
+    @classmethod
+    def convert(cls, output: np.ndarray, **_) -> ROSFloat64MultiArray:
+        """
+        Takes a numpy array and returns a ROS message of type Float64MultiArray
+        :return: Float32
+        """
+        return numpy_to_multiarray(output, ROSFloat64MultiArray)
 
 
 class Image(SupportedType):
